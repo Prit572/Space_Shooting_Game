@@ -24,7 +24,3 @@ Space Shooter is an interactive game where players control a spaceship and shoot
 - Press SPACE to shoot
 - Avoid enemy ships and their projectiles
 - Score points by destroying enemy ships
-
-## License
-
-MIT License 
