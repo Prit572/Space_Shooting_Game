@@ -4,8 +4,49 @@ let enemies = [];
 let particles = [];
 let score = 0;
 let gameState = "start";
-let weaponType = 'normal';
 let lastShot = 0;
+
+// --- Power-up Types ---
+const POWER_UP_TYPES = [
+  {
+    name: 'weapon',
+    color: [255, 200, 0],
+    label: 'W',
+    duration: 14000, // 14 seconds
+    apply: () => { player.weaponType = 'spread'; },
+    revert: () => { player.weaponType = 'normal'; }
+  },
+  {
+    name: 'speed',
+    color: [0, 255, 0],
+    label: 'S',
+    duration: 12000, // 12 seconds
+    apply: () => { player.speed = 14; },
+    revert: () => { player.speed = 7; }
+  },
+  {
+    name: 'shield',
+    color: [0, 200, 255],
+    label: 'SH',
+    duration: 15000, // 15 seconds
+    apply: () => { player.shield = true; },
+    revert: () => { player.shield = false; }
+  }
+];
+
+let powerUps = [];
+let activePowerUp = null;
+let powerUpEndTime = 0;
+let nextPowerUpTime = 0;
+
+// --- Enemy Spawning: slow down and limit ---
+let enemySpawnInterval = 70; // frames between spawns (was 45)
+let maxEnemies = 6;
+
+// --- Supabase config ---
+const SUPABASE_URL = 'https://iwconnuhwmsjpixxbqgv.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3Y29ubnVod21zanBpeHhicWd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDgwNjA1NDIsImV4cCI6MjA2MzYzNjU0Mn0.lfNy4PN6TizgyexTn3bygScVPNsHMs6yStBWPS3LwFo';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 function setup() {
   createCanvas(800, 600);
@@ -48,7 +89,9 @@ function gamePlay() {
   updateProjectiles();
   updateEnemies();
   updateParticles();
+  updatePowerUps();
   checkCollisions();
+  checkPowerUpCollision();
   
   // Draw
   drawParticles();
@@ -56,6 +99,7 @@ function gamePlay() {
   drawProjectiles();
   drawEnemies();
   drawScore();
+  drawPowerUps();
 }
 
 function resetGame() {
@@ -64,23 +108,29 @@ function resetGame() {
     y: height - 50,
     speed: 7,
     weaponType: 'normal',
-    weaponLevel: 1
+    weaponLevel: 1,
+    lives: 3
   };
   projectiles = [];
   enemies = [];
   particles = [];
   score = 0;
-  weaponType = 'normal';
 }
 
 function keyPressed() {
+  // Prevent game restart if email input is focused
+  const emailInput = document.getElementById('playerEmail');
+  if (emailInput && document.activeElement === emailInput) {
+    return;
+  }
   if (gameState === "start" || gameState === "gameover") {
+    hideScoreModal();
     gameState = "playing";
     resetGame();
   }
-  if (key === '1') weaponType = 'normal';
-  if (key === '2') weaponType = 'spread';
-  if (key === '3') weaponType = 'laser';
+  if (key === '1') player.weaponType = 'normal';
+  if (key === '2') player.weaponType = 'spread';
+  if (key === '3') player.weaponType = 'laser';
 }
 
 function handlePlayerMovement() {
@@ -103,7 +153,7 @@ function handleShooting() {
 }
 
 function shoot() {
-  switch(weaponType) {
+  switch(player.weaponType) {
     case 'spread':
       for (let angle = -20; angle <= 20; angle += 20) {
         projectiles.push({
@@ -224,21 +274,20 @@ function updateProjectiles() {
 }
 
 function updateEnemies() {
-  if (frameCount % 45 === 0) {
+  if (frameCount % enemySpawnInterval === 0 && enemies.length < maxEnemies) {
     spawnEnemy();
   }
-  
   for (let enemy of enemies) {
     enemy.y += enemy.speed;
     if (enemy.type === 'zigzag') {
       enemy.x += Math.sin(frameCount * 0.1) * 3;
     }
   }
-  
   for (let i = enemies.length - 1; i >= 0; i--) {
     if (enemies[i].y > height) {
       enemies.splice(i, 1);
-      gameState = "gameover";
+      player.lives--;
+      if (player.lives <= 0) gameState = "gameover";
     }
   }
 }
@@ -567,6 +616,9 @@ function checkCollisions() {
           enemies.splice(j, 1);
           score += 10;
           createExplosion(e.x, e.y, [255, 0, 0]);
+          if (random() < 0.4) {
+            spawnPowerUp(e.x, e.y);
+          }
         }
         break;
       }
@@ -575,8 +627,15 @@ function checkCollisions() {
   
   for (let enemy of enemies) {
     if (dist(player.x, player.y, enemy.x, enemy.y) < 25) {
-      gameState = "gameover";
+      player.lives--;
       createExplosion(player.x, player.y, [255, 255, 255]);
+      if (player.lives <= 0) {
+        gameState = "gameover";
+      } else {
+        // Reset player position
+        player.x = width / 2;
+        player.y = height - 50;
+      }
     }
   }
 }
@@ -587,7 +646,8 @@ function drawScore() {
   textSize(24);
   textAlign(LEFT);
   text('Score: ' + score, 10, 30);
-  text('Weapon: ' + weaponType, 10, 60);
+  text('Weapon: ' + player.weaponType, 10, 60);
+  text('Lives: ' + player.lives, 10, 110);
   textSize(16);
   text('Press 1-3 to change weapons', 10, 85);
 }
@@ -627,4 +687,184 @@ function drawGameOverScreen() {
   text('Score: ' + score, width/2, height/2 + 20);
   textSize(20);
   text('Press any key to restart', width/2, height/2 + 60);
+  // Show modal if not already visible
+  if (document.getElementById('scoreModal').style.display !== 'block') {
+    showScoreModal(score);
+  }
+}
+
+// --- Power-up Functions ---
+function spawnPowerUp(x, y) {
+  const type = random(POWER_UP_TYPES);
+  powerUps.push({
+    x, y,
+    type,
+    size: 22,
+    vy: 2 + random(1),
+    rotation: random(TWO_PI)
+  });
+}
+
+function spawnPowerUpAnywhere() {
+  // Only spawn if none on screen, enough time has passed, and no pending effect
+  if (powerUps.length === 0 && millis() > nextPowerUpTime) {
+    const type = random(POWER_UP_TYPES);
+    const x = random(60, width - 60);
+    const y = -30;
+    powerUps.push({
+      x, y,
+      type,
+      size: 32,
+      vy: 2.2 + random(1),
+      rotation: random(TWO_PI)
+    });
+    // Next power-up can spawn after 8-12 seconds (set only after this one is collected or missed)
+  }
+}
+
+function updatePowerUps() {
+  spawnPowerUpAnywhere();
+  for (let i = powerUps.length - 1; i >= 0; i--) {
+    let p = powerUps[i];
+    p.y += p.vy;
+    p.rotation += 0.05;
+    // Remove if off screen (missed)
+    if (p.y > height + 40) {
+      powerUps.splice(i, 1);
+      // Set timer for next power-up
+      nextPowerUpTime = millis() + random(8000, 12000);
+    }
+  }
+  // Handle power-up expiration
+  if (activePowerUp && millis() > powerUpEndTime) {
+    activePowerUp.revert();
+    activePowerUp = null;
+  }
+}
+
+function drawPowerUps() {
+  for (let p of powerUps) {
+    push();
+    translate(p.x, p.y);
+    rotate(p.rotation);
+    // Outer glow
+    for (let i = 8; i > 0; i--) {
+      fill(p.type.color[0], p.type.color[1], p.type.color[2], 10*i);
+      rectMode(CENTER);
+      rect(0, 0, p.size + i*8, p.size/1.5 + i*4, (p.size + i*8)/2);
+    }
+    // Capsule body (gradient)
+    for (let j = 0; j < 10; j++) {
+      let inter = map(j, 0, 9, 0.7, 1);
+      let c = lerpColor(color(p.type.color), color(255,255,255), inter);
+      fill(c);
+      rectMode(CENTER);
+      rect(0, 0, p.size - j*2, p.size/1.5 - j, (p.size - j*2)/2);
+    }
+    // Glowing core
+    fill(255,255,255, 180);
+    ellipse(0, 0, p.size/2.5, p.size/2.5);
+    // Highlight
+    noStroke();
+    fill(255, 255, 255, 80);
+    ellipse(-p.size/4, -p.size/8, p.size/2, p.size/4);
+    // Label
+    fill(0);
+    textAlign(CENTER, CENTER);
+    textSize(16);
+    text(p.type.label, 0, 1);
+    pop();
+  }
+}
+
+function checkPowerUpCollision() {
+  for (let i = powerUps.length - 1; i >= 0; i--) {
+    let p = powerUps[i];
+    if (dist(player.x, player.y, p.x, p.y) < 36) {
+      // Always revert previous effect before applying new
+      if (activePowerUp) activePowerUp.revert();
+      activePowerUp = p.type;
+      activePowerUp.apply();
+      powerUpEndTime = millis() + p.type.duration;
+      powerUps.splice(i, 1);
+      // Set timer for next power-up
+      nextPowerUpTime = millis() + random(8000, 12000);
+    }
+  }
+}
+
+// --- Modal helpers ---
+function showScoreModal(score) {
+  document.getElementById('finalScore').textContent = score;
+  document.getElementById('scoreModal').style.display = 'block';
+  fetchLeaderboard();
+}
+function hideScoreModal() {
+  document.getElementById('scoreModal').style.display = 'none';
+}
+
+// --- Save score to Supabase ---
+async function saveScore() {
+  const email = document.getElementById('playerEmail').value;
+  const score = parseInt(document.getElementById('finalScore').textContent);
+  if (!email) {
+    alert('Please enter your email');
+    return;
+  }
+  try {
+    const { error } = await supabase.from('scores').insert([{ email, score }]);
+    if (error) throw error;
+    alert('Score saved!');
+    fetchLeaderboard();
+  } catch (err) {
+    alert('Error saving score.');
+  }
+}
+
+// --- Fetch leaderboard from Supabase ---
+async function fetchLeaderboard() {
+  const email = document.getElementById('playerEmail').value;
+  // Get top 3
+  const { data: topScores, error } = await supabase
+    .from('scores')
+    .select('email, score')
+    .order('score', { ascending: false })
+    .limit(3);
+  // Get user's best score (if not in top 3)
+  let userRow = null;
+  if (email) {
+    // Get best score for this email
+    const { data: userScores } = await supabase
+      .from('scores')
+      .select('email, score')
+      .eq('email', email)
+      .order('score', { ascending: false })
+      .limit(1);
+    if (userScores && userScores.length > 0) {
+      // Check if user is already in top 3
+      const inTop = topScores.some(row => row.email === email && row.score === userScores[0].score);
+      if (!inTop) {
+        userRow = userScores[0];
+      }
+    }
+  }
+  const lb = document.getElementById('leaderboardList');
+  lb.innerHTML = '';
+  if (topScores && topScores.length > 0) {
+    topScores.forEach((row, i) => {
+      const div = document.createElement('div');
+      div.className = 'lb-row';
+      div.innerHTML = `<span>${i+1}. ${row.email}</span><span>${row.score}</span>`;
+      lb.appendChild(div);
+    });
+  } else {
+    lb.innerHTML = '<div>No scores yet.</div>';
+  }
+  if (userRow) {
+    const div = document.createElement('div');
+    div.className = 'lb-row';
+    div.style.color = '#0ff';
+    div.innerHTML = `<span>You (${userRow.email})</span><span>${userRow.score}</span>`;
+    lb.appendChild(div);
+  }
 }
